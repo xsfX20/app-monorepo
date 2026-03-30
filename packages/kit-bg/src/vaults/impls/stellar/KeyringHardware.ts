@@ -117,7 +117,7 @@ export class KeyringHardware extends KeyringHardwareBase {
     decodeTx: InstanceType<typeof sdkStellar.StellarSdk.Transaction>,
   ) {
     // 先尝试读取
-    let sorobanData = decodeTx
+    const sorobanData = decodeTx
       .toEnvelope?.()
       ?.v1?.()
       ?.tx?.()
@@ -126,9 +126,8 @@ export class KeyringHardware extends KeyringHardwareBase {
 
     if (!sorobanData) {
       return undefined;
-    } else {
-      return sorobanData.toXDR();
     }
+    return sorobanData.toXDR();
   }
 
   private _encodeXdrArrayToHex(items: { toXDR(): Buffer }[]): string {
