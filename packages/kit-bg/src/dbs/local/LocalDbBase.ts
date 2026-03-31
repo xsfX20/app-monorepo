@@ -2101,11 +2101,14 @@ export abstract class LocalDbBase extends LocalDbBaseContainer {
       keylessDetailsInfo,
       skipAddHDNextIndexedAccount,
     } = params;
+    const { overrideWalletId } = params;
     const context = await this.getContext({ verifyPassword: password });
     let walletId = accountUtils.buildHdWalletId({
       nextHD: context.nextHD,
     });
-    if (isKeylessWallet) {
+    if (overrideWalletId) {
+      walletId = overrideWalletId;
+    } else if (isKeylessWallet) {
       if (!walletXfp) {
         throw new OneKeyLocalError('walletXfp is required for keyless wallet');
       }

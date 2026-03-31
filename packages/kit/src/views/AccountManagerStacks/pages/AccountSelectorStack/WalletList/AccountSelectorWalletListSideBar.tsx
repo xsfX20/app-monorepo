@@ -29,6 +29,10 @@ import {
 import { analytics } from '@onekeyhq/shared/src/analytics';
 import { emptyArray } from '@onekeyhq/shared/src/consts';
 import {
+  BOT_WALLET_STATUS_ACTIVE,
+  BOT_WALLET_STATUS_DEACTIVATED,
+} from '@onekeyhq/shared/src/consts/dbConsts';
+import {
   EAppEventBusNames,
   appEventBus,
 } from '@onekeyhq/shared/src/eventBus/appEventBus';
@@ -141,18 +145,68 @@ export function AccountSelectorWalletListSideBar({
         ignoreNonBackedUpWallets: hideNonBackedUpWallet,
       });
 
-      const wallets = r.wallets.map((wallet) => {
-        const isQrWallet = accountUtils.isQrWallet({
-          walletId: wallet.id,
-        });
+      const botWalletEntries = await Promise.all(
+        r.wallets.map(async (wallet) => {
+          const isBotWallet = accountUtils.isBotWallet({ walletId: wallet.id });
+          if (!isBotWallet) {
+            return {
+              wallet,
+              isBotWallet,
+              isBotDeactivated: false,
+            };
+          }
 
-        const badge = isQrWallet ? 'QR' : undefined;
+          const meta =
+            await backgroundApiProxy.serviceAccount.getBotWalletMetadata(
+              wallet.id,
+            );
+          if (!meta?.visible) {
+            return null;
+          }
 
-        return {
-          ...wallet,
-          badge,
-        };
-      });
+          return {
+            wallet,
+            isBotWallet,
+            isBotDeactivated: meta.status === BOT_WALLET_STATUS_DEACTIVATED,
+          };
+        }),
+      );
+
+      const filteredWallets = botWalletEntries.filter(
+        (
+          entry,
+        ): entry is {
+          wallet: IDBWallet;
+          isBotWallet: boolean;
+          isBotDeactivated: boolean;
+        } => Boolean(entry),
+      );
+
+      const wallets = filteredWallets.map(
+        ({ wallet, isBotWallet, isBotDeactivated }) => {
+          const isQrWallet = accountUtils.isQrWallet({
+            walletId: wallet.id,
+          });
+
+          let badge: string | number | undefined;
+          if (isQrWallet) {
+            badge = 'QR';
+          }
+
+          let botStatus;
+          if (isBotWallet) {
+            botStatus = isBotDeactivated
+              ? BOT_WALLET_STATUS_DEACTIVATED
+              : BOT_WALLET_STATUS_ACTIVE;
+          }
+
+          return {
+            ...wallet,
+            badge,
+            botStatus,
+          };
+        },
+      );
 
       return {
         wallets,

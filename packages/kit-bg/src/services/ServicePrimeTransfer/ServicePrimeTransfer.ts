@@ -24,6 +24,7 @@ import {
 } from '@onekeyhq/shared/src/background/backgroundDecorators';
 import { presetNetworksMap } from '@onekeyhq/shared/src/config/presetNetworks';
 import {
+  BOT_WALLET_STATUS_DEACTIVATED,
   WALLET_TYPE_HD,
   WALLET_TYPE_IMPORTED,
   WALLET_TYPE_WATCHING,
@@ -94,6 +95,7 @@ import e2eeClientToClientApi, {
 } from './e2ee/e2eeClientToClientApi';
 import { createE2EEClientToClientApiProxy } from './e2ee/e2eeClientToClientApiProxy';
 import { createE2EEServerApiProxy } from './e2ee/e2eeServerApiProxy';
+import { filterTransferWallets } from './servicePrimeTransferUtils';
 
 import type {
   IECDHEKeyExchangeRequest,
@@ -854,13 +856,13 @@ class ServicePrimeTransfer extends ServiceBase {
   @backgroundMethod()
   async buildTransferData({
     isForCloudBackup,
+    walletIds,
   }: {
     isForCloudBackup?: boolean;
+    walletIds?: string[];
   } = {}): Promise<IPrimeTransferData> {
     const { serviceAccount, serviceNetwork: _serviceNetwork } =
       this.backgroundApi;
-
-    const credentials = await serviceAccount.dumpCredentials();
 
     const publicData: IPrimeTransferPublicData = {
       dataTime: Date.now(),
@@ -868,6 +870,42 @@ class ServicePrimeTransfer extends ServiceBase {
       totalAccountsCount: 0,
       walletDetails: [],
     };
+    const { version } = platformEnv;
+
+    const { wallets } = await serviceAccount.getWallets();
+    const filteredWallets = filterTransferWallets({
+      wallets,
+      walletIds,
+    });
+    const requestedWalletIds = walletIds?.length ? [...new Set(walletIds)] : [];
+    if (
+      requestedWalletIds.length &&
+      filteredWallets.length !== requestedWalletIds.length
+    ) {
+      throw new OneKeyLocalError('Some wallets cannot be transferred');
+    }
+    for (const wallet of filteredWallets) {
+      if (accountUtils.isBotWallet({ walletId: wallet.id })) {
+        const botWalletMeta =
+          await this.backgroundApi.simpleDb.botWallet.getMetadata(wallet.id);
+        if (botWalletMeta?.status === BOT_WALLET_STATUS_DEACTIVATED) {
+          throw new OneKeyLocalError(
+            'Cannot transfer mnemonic: Bot wallet is deactivated',
+          );
+        }
+      }
+    }
+
+    const credentials = walletIds?.length
+      ? Object.fromEntries(
+          await Promise.all(
+            filteredWallets.map(async (wallet) => [
+              wallet.id,
+              await localDb.getCredential(wallet.id),
+            ]),
+          ),
+        )
+      : await serviceAccount.dumpCredentials();
 
     const privateBackupData: IPrimeTransferPrivateData = {
       credentials,
@@ -875,13 +913,6 @@ class ServicePrimeTransfer extends ServiceBase {
       watchingAccounts: {},
       wallets: {},
     };
-    const { version } = platformEnv;
-
-    const { wallets } = await serviceAccount.getWallets();
-
-    // Filter out keyless wallets
-    const filteredWallets = wallets.filter((wallet) => !wallet.isKeyless);
-
     const walletAccountMap = filteredWallets.reduce(
       (summary, current) => {
         summary[current.id] = current;

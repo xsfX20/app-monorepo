@@ -10,6 +10,7 @@ import {
   decodeSensitiveTextAsync,
   decryptImportedCredential,
   decryptRevealableSeed,
+  deriveBotMnemonic,
   encryptImportedCredential,
   ensureSensitiveTextEncoded,
   mnemonicFromEntropy,
@@ -39,6 +40,8 @@ import { getNetworkIdsMap } from '@onekeyhq/shared/src/config/networkIds';
 import { ALL_NETWORK_ACCOUNT_MOCK_ADDRESS } from '@onekeyhq/shared/src/consts/addresses';
 import { BTC_FIRST_TAPROOT_PATH } from '@onekeyhq/shared/src/consts/chainConsts';
 import {
+  BOT_WALLET_STATUS_ACTIVE,
+  BOT_WALLET_STATUS_DEACTIVATED,
   WALLET_TYPE_EXTERNAL,
   WALLET_TYPE_HD,
   WALLET_TYPE_IMPORTED,
@@ -105,6 +108,7 @@ import type {
   IQrWalletAirGapAccount,
 } from '@onekeyhq/shared/types/account';
 import type { IGeneralInputValidation } from '@onekeyhq/shared/types/address';
+import type { IBotWalletMetadata } from '@onekeyhq/shared/types/botWallet';
 import type {
   IDeviceSharedCallParams,
   IOneKeyDeviceFeatures,
@@ -3313,6 +3317,240 @@ class ServiceAccount extends ServiceBase {
   }
 
   @backgroundMethod()
+  @toastIfError()
+  async createBotWallet({
+    parentKeylessWalletId,
+    name,
+    visible = false,
+  }: {
+    parentKeylessWalletId: string;
+    name: string;
+    visible?: boolean;
+  }): Promise<{ wallet: IDBWallet; indexedAccount?: IDBIndexedAccount }> {
+    if (!accountUtils.isKeylessWallet({ walletId: parentKeylessWalletId })) {
+      throw new OneKeyLocalError(
+        'createBotWallet ERROR: parent must be a Keyless wallet',
+      );
+    }
+
+    const { servicePassword } = this.backgroundApi;
+    const { password } = await servicePassword.promptPasswordVerifyByWallet({
+      walletId: parentKeylessWalletId,
+      reason: EReasonForNeedPassword.CreateOrRemoveWallet,
+    });
+
+    return this.createBotWalletMutex.runExclusive(async () => {
+      // 1. Get parent keyless mnemonic
+      const parentCredential = await localDb.getCredential(
+        parentKeylessWalletId,
+      );
+      const parentMnemonic = await mnemonicFromEntropy(
+        parentCredential.credential,
+        password,
+      );
+
+      // 2. Get next bot index
+      const nextIndex = await simpleDb.botWallet.getNextIndex(
+        parentKeylessWalletId,
+      );
+
+      // 3. Derive bot mnemonic (pure, deterministic)
+      const botMnemonic = deriveBotMnemonic(parentMnemonic, nextIndex);
+
+      // 4. Build bot wallet ID following convention
+      const botWalletId = accountUtils.buildBotWalletId({
+        parentKeylessWalletId,
+        index: nextIndex,
+      });
+      const botName = name || `Bot #${nextIndex + 1}`;
+
+      // 5. Prepare revealable seed and hash for localDb
+      const { mnemonic: realMnemonic } = await this.validateMnemonic(
+        await servicePassword.encodeSensitiveText({ text: botMnemonic }),
+      );
+      const walletHashAndXfp = await this.hdWalletHashAndXfpBuilder({
+        realMnemonic,
+      });
+      let rs: string | undefined;
+      try {
+        rs = await revealableSeedFromMnemonic(realMnemonic, password);
+      } catch {
+        throw new InvalidMnemonic();
+      }
+
+      // 6. Create HD wallet with overridden bot wallet ID
+      const result = await localDb.createHDWallet({
+        password,
+        rs,
+        backuped: true,
+        name: botName,
+        walletHash: walletHashAndXfp.hash,
+        walletXfp: walletHashAndXfp.xfp,
+        overrideWalletId: botWalletId,
+      });
+
+      // 7. Save bot metadata to SimpleDb cache
+      const metadata: IBotWalletMetadata = {
+        index: nextIndex,
+        name: botName,
+        visible,
+        status: BOT_WALLET_STATUS_ACTIVE,
+        createdAt: Date.now(),
+      };
+      await simpleDb.botWallet.setMetadata(botWalletId, metadata);
+
+      // 8. Trigger cloud sync
+      void this.backgroundApi.servicePrimeCloudSync
+        .syncNowKeyless({
+          callerName: 'Bot Wallet Created',
+          noDebounceUpload: true,
+        })
+        .catch((error) => {
+          errorUtils.autoPrintErrorIgnore(error);
+        });
+
+      await timerUtils.wait(100);
+      appEventBus.emit(EAppEventBusNames.WalletUpdate, undefined);
+      return result;
+    });
+  }
+
+  @backgroundMethod()
+  @toastIfError()
+  async getBotWallets({
+    parentKeylessWalletId,
+  }: {
+    parentKeylessWalletId: string;
+  }): Promise<
+    Array<{
+      wallet: IDBWallet;
+      metadata: IBotWalletMetadata;
+    }>
+  > {
+    const botEntries = await simpleDb.botWallet.getBotWalletsForParent(
+      parentKeylessWalletId,
+    );
+    const results: Array<{
+      wallet: IDBWallet;
+      metadata: IBotWalletMetadata;
+    }> = [];
+    for (const entry of botEntries) {
+      try {
+        const wallet = await this.getWalletSafe({
+          walletId: entry.walletId,
+        });
+        if (wallet) {
+          results.push({ wallet, metadata: entry.metadata });
+        }
+      } catch {
+        // Wallet may have been removed locally
+      }
+    }
+    return results;
+  }
+
+  @backgroundMethod()
+  @toastIfError()
+  async updateBotWalletVisibility({
+    walletId,
+    visible,
+  }: {
+    walletId: string;
+    visible: boolean;
+  }): Promise<void> {
+    const metadata = await simpleDb.botWallet.getMetadata(walletId);
+    if (!metadata) {
+      throw new OneKeyLocalError(
+        'updateBotWalletVisibility ERROR: Bot wallet metadata not found',
+      );
+    }
+    await simpleDb.botWallet.setMetadata(walletId, {
+      ...metadata,
+      visible,
+    });
+    void this.backgroundApi.servicePrimeCloudSync
+      .syncNowKeyless({
+        callerName: 'Bot Wallet Visibility Updated',
+        noDebounceUpload: true,
+      })
+      .catch((error) => {
+        errorUtils.autoPrintErrorIgnore(error);
+      });
+    appEventBus.emit(EAppEventBusNames.WalletUpdate, undefined);
+  }
+
+  @backgroundMethod()
+  @toastIfError()
+  async deactivateBotWallet({ walletId }: { walletId: string }): Promise<void> {
+    const metadata = await simpleDb.botWallet.getMetadata(walletId);
+    if (!metadata) {
+      throw new OneKeyLocalError(
+        'deactivateBotWallet ERROR: Bot wallet metadata not found',
+      );
+    }
+    await simpleDb.botWallet.setMetadata(walletId, {
+      ...metadata,
+      status: BOT_WALLET_STATUS_DEACTIVATED,
+      deactivatedAt: Date.now(),
+    });
+    void this.backgroundApi.servicePrimeCloudSync
+      .syncNowKeyless({
+        callerName: 'Bot Wallet Deactivated',
+        noDebounceUpload: true,
+      })
+      .catch((error) => {
+        errorUtils.autoPrintErrorIgnore(error);
+      });
+    appEventBus.emit(EAppEventBusNames.WalletUpdate, undefined);
+  }
+
+  @backgroundMethod()
+  @toastIfError()
+  async reactivateBotWallet({ walletId }: { walletId: string }): Promise<void> {
+    const metadata = await simpleDb.botWallet.getMetadata(walletId);
+    if (!metadata) {
+      throw new OneKeyLocalError(
+        'reactivateBotWallet ERROR: Bot wallet metadata not found',
+      );
+    }
+    await simpleDb.botWallet.setMetadata(walletId, {
+      ...metadata,
+      status: BOT_WALLET_STATUS_ACTIVE,
+      deactivatedAt: undefined,
+    });
+    void this.backgroundApi.servicePrimeCloudSync
+      .syncNowKeyless({
+        callerName: 'Bot Wallet Reactivated',
+        noDebounceUpload: true,
+      })
+      .catch((error) => {
+        errorUtils.autoPrintErrorIgnore(error);
+      });
+    appEventBus.emit(EAppEventBusNames.WalletUpdate, undefined);
+  }
+
+  @backgroundMethod()
+  async getBotWalletMetadata(
+    walletId: string,
+  ): Promise<IBotWalletMetadata | undefined> {
+    return simpleDb.botWallet.getMetadata(walletId);
+  }
+
+  @backgroundMethod()
+  async isBotWalletDeactivated({
+    walletId,
+  }: {
+    walletId: string;
+  }): Promise<boolean> {
+    if (!accountUtils.isBotWallet({ walletId })) {
+      return false;
+    }
+
+    const metadata = await simpleDb.botWallet.getMetadata(walletId);
+    return metadata?.status === BOT_WALLET_STATUS_DEACTIVATED;
+  }
+
+  @backgroundMethod()
   async isTempWalletRemoved({
     wallet,
   }: {
@@ -3692,6 +3930,15 @@ class ServiceAccount extends ServiceBase {
       throw new OneKeyLocalError(
         'getHDAccountMnemonic ERROR: Not a HD account',
       );
+    }
+    // Block mnemonic export for deactivated Bot wallets
+    if (accountUtils.isBotWallet({ walletId })) {
+      const meta = await simpleDb.botWallet.getMetadata(walletId);
+      if (meta?.status === BOT_WALLET_STATUS_DEACTIVATED) {
+        throw new OneKeyLocalError(
+          'Cannot export mnemonic: Bot wallet is deactivated',
+        );
+      }
     }
     const { password } =
       await this.backgroundApi.servicePassword.promptPasswordVerifyByWallet({
@@ -4257,6 +4504,8 @@ class ServiceAccount extends ServiceBase {
       });
     });
   }
+
+  createBotWalletMutex = new Semaphore(1);
 
   generateAllHdAndQrWalletsHashAndXfpMutex = new Semaphore(1);
 

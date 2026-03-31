@@ -10,10 +10,12 @@ import {
   SizableText,
   Stack,
   Tooltip,
+  XStack,
   useMedia,
 } from '@onekeyhq/components';
 import type { IWalletAvatarProps } from '@onekeyhq/kit/src/components/WalletAvatar';
 import { WalletAvatar } from '@onekeyhq/kit/src/components/WalletAvatar';
+import { getBotWalletNameBadges } from '@onekeyhq/kit/src/utils/botWalletStatusUtils';
 import type { IDBWallet } from '@onekeyhq/kit-bg/src/dbs/local/types';
 import type { IAccountSelectorFocusedWallet } from '@onekeyhq/kit-bg/src/dbs/simple/entity/SimpleDbEntityAccountSelector';
 import type { ISettingsPersistAtom } from '@onekeyhq/kit-bg/src/states/jotai/atoms';
@@ -21,6 +23,7 @@ import {
   useAccountSelectorStatusAtom,
   useSettingsPersistAtom,
 } from '@onekeyhq/kit-bg/src/states/jotai/atoms';
+import { BOT_WALLET_STATUS_DEACTIVATED } from '@onekeyhq/shared/src/consts/dbConsts';
 import { ETranslations } from '@onekeyhq/shared/src/locale';
 import platformEnv from '@onekeyhq/shared/src/platformEnv';
 import accountUtils from '@onekeyhq/shared/src/utils/accountUtils';
@@ -51,11 +54,13 @@ function WalletListItemBaseView({
   onLongPress,
   avatarView,
   name,
+  nameMetaView,
   ...rest
 }: ComponentProps<typeof Stack> & {
   selected: boolean;
   avatarView: React.ReactNode;
   name: string | undefined;
+  nameMetaView?: React.ReactNode;
 }) {
   const media = useMedia();
 
@@ -105,6 +110,7 @@ function WalletListItemBaseView({
       >
         {name}
       </SizableText>
+      {nameMetaView}
     </Stack>
   );
 
@@ -230,6 +236,11 @@ export function WalletListItem({
   const hiddenWallets = wallet?.hiddenWallets;
   const isHwOrQrWallet = accountUtils.isHwOrQrWallet({ walletId: wallet?.id });
   const isHiddenWallet = accountUtils.isHwHiddenWallet({ wallet });
+  const isBotWalletItem = accountUtils.isBotWallet({ walletId: wallet?.id });
+  const botNameBadges = getBotWalletNameBadges({
+    isBotWallet: isBotWalletItem,
+    isBotWalletDeactivated: wallet?.botStatus === BOT_WALLET_STATUS_DEACTIVATED,
+  });
   const [settings, setSettings] = useSettingsPersistAtom();
 
   useEffect(() => {
@@ -260,6 +271,42 @@ export function WalletListItem({
         walletAvatarProps ? <WalletAvatar {...walletAvatarProps} /> : null
       }
       name={i18nWalletName}
+      nameMetaView={
+        botNameBadges.length ? (
+          <XStack
+            mt="$1"
+            gap="$1"
+            justifyContent="center"
+            flexWrap="wrap"
+            width="100%"
+          >
+            {botNameBadges.map((badgeItem) => (
+              <Stack
+                key={badgeItem.key}
+                px="$1.5"
+                py="$0.5"
+                borderRadius="$1"
+                backgroundColor={
+                  badgeItem.tone === 'caution'
+                    ? '$bgCautionSubdued'
+                    : '$bgSubdued'
+                }
+              >
+                <SizableText
+                  size="$bodyXs"
+                  color={
+                    badgeItem.tone === 'caution'
+                      ? '$textCaution'
+                      : '$textSubdued'
+                  }
+                >
+                  {badgeItem.label}
+                </SizableText>
+              </Stack>
+            ))}
+          </XStack>
+        ) : null
+      }
       {...rest}
     />
   );

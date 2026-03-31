@@ -22,6 +22,7 @@ import { useDevSettingsPersistAtom } from '@onekeyhq/kit-bg/src/states/jotai/ato
 import { ETranslations } from '@onekeyhq/shared/src/locale';
 import platformEnv from '@onekeyhq/shared/src/platformEnv';
 import {
+  EAccountManagerStacksRoutes,
   EModalRoutes,
   EOnboardingV2OneKeyIDLoginMode,
 } from '@onekeyhq/shared/src/routes';
@@ -119,6 +120,11 @@ function WalletEditButtonView({
       accountUtils.isHwWallet({ walletId: wallet?.id })
     );
   }, [wallet, isPrimeAvailable]);
+
+  const showBotWalletManagerButton = useMemo(
+    () => Boolean(isKeyless && wallet?.id),
+    [isKeyless, wallet?.id],
+  );
 
   const navigation = useAppNavigation();
 
@@ -242,6 +248,19 @@ function WalletEditButtonView({
             />
           ) : null}
 
+          {showBotWalletManagerButton ? (
+            <ActionList.Item
+              icon="WalletOutline"
+              label="Bot Wallet Management"
+              onClose={handleActionListClose}
+              onPress={() => {
+                navigation.push(EAccountManagerStacksRoutes.BotWalletManager, {
+                  parentKeylessWalletId: wallet?.id || '',
+                });
+              }}
+            />
+          ) : null}
+
           {showAddHiddenWalletButton ? (
             <AddHiddenWalletButton
               wallet={wallet}
@@ -299,6 +318,7 @@ function WalletEditButtonView({
       showBackupButton,
       showDeviceManagementButton,
       showBulkCopyAddressesButton,
+      showBotWalletManagerButton,
       network?.id,
       isPrimeUser,
       showAddHiddenWalletButton,

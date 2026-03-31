@@ -35,6 +35,7 @@ export default function PagePrimeTransfer() {
   const routeParamsCode = route.params?.code;
   const routeParamsServer = route.params?.server;
   const routeParamsTransferType = route.params?.transferType;
+  const routeParamsBotWalletId = route.params?.botWalletId;
   const routeParamsDefaultTab = route.params?.defaultTab;
 
   const initialCode = routeParamsCode || '';
@@ -147,6 +148,7 @@ export default function PagePrimeTransfer() {
         <>
           <PrimeTransferDirection
             remotePairingCode={remotePairingCode}
+            botWalletId={routeParamsBotWalletId}
             transferType={routeParamsTransferType}
           />
         </>
@@ -156,6 +158,7 @@ export default function PagePrimeTransfer() {
   }, [
     routeParamsCode,
     routeParamsServer,
+    routeParamsBotWalletId,
     routeParamsDefaultTab,
     routeParamsTransferType,
     primeTransferAtom.status,

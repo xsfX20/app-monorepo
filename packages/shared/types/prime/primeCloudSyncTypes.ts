@@ -313,6 +313,19 @@ export type ICloudSyncPayloadWallet = {
   hwDeviceId: string | undefined;
   passphraseState: string | undefined;
   walletType: IDBWalletType | undefined;
+  // Bot wallet metadata — only present on Keyless wallet sync items
+  botWallets?: ICloudSyncBotWalletItem[];
+};
+
+export type ICloudSyncBotWalletItem = {
+  index: number;
+  name: string;
+  visible: boolean;
+  status: 'active' | 'deactivated';
+  deactivatedAt?: number;
+  createdAt: number;
+  /** The actual HD wallet ID in local DB for this bot wallet */
+  actualWalletId?: string;
 };
 export type ICloudSyncPayloadAccount = {
   name: string;

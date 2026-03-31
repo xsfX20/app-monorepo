@@ -158,9 +158,11 @@ export function WaitingTransferCompleteAlert() {
 
 export function PrimeTransferDirection({
   remotePairingCode,
+  botWalletId,
   transferType,
 }: {
   remotePairingCode: string;
+  botWalletId?: string;
   transferType?: EPrimeTransferDataType;
 }) {
   const [isKeylessWalletTransfer, setIsKeylessWalletTransfer] = useState(
@@ -375,7 +377,9 @@ export function PrimeTransferDirection({
           });
         } else {
           const transferData =
-            await backgroundApiProxy.servicePrimeTransfer.buildTransferData();
+            await backgroundApiProxy.servicePrimeTransfer.buildTransferData({
+              walletIds: botWalletId ? [botWalletId] : undefined,
+            });
           if (transferData?.isEmptyData) {
             Toast.error({
               title: intl.formatMessage({
@@ -426,6 +430,7 @@ export function PrimeTransferDirection({
       directionUserInfo?.toUser?.appPlatformName,
       exitTransferFlow,
       isKeylessWalletTransfer,
+      botWalletId,
     ],
   );
 

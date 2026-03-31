@@ -7,6 +7,7 @@ import type {
 } from '@onekeyhq/kit-bg/src/dbs/local/types';
 import type { IAccountDeriveTypes } from '@onekeyhq/kit-bg/src/vaults/types';
 import {
+  BOT_WALLET_ID_PREFIX,
   WALLET_TYPE_EXTERNAL,
   WALLET_TYPE_HD,
   WALLET_TYPE_HW,
@@ -41,6 +42,7 @@ import bufferUtils from './bufferUtils';
 import { generateUUID } from './miscUtils';
 import networkUtils from './networkUtils';
 
+import type { IBotWalletParsedId } from '../../types/botWallet';
 import type { IExternalConnectionInfo } from '../../types/externalWallet.types';
 
 function getWalletIdFromAccountId({
@@ -1059,6 +1061,50 @@ function getKeylessWalletPackSetId({ walletId }: { walletId: string }): string {
   return packSetId;
 }
 
+// ---- Bot Wallet ID utilities ----
+
+function buildBotWalletId({
+  parentKeylessWalletId,
+  index,
+}: {
+  parentKeylessWalletId: string;
+  index: number;
+}): string {
+  return `${BOT_WALLET_ID_PREFIX}${parentKeylessWalletId}--${index}`;
+}
+
+function parseBotWalletId(walletId: string): IBotWalletParsedId | undefined {
+  if (!walletId.startsWith(BOT_WALLET_ID_PREFIX)) {
+    return undefined;
+  }
+  const rest = walletId.slice(BOT_WALLET_ID_PREFIX.length);
+  const lastSep = rest.lastIndexOf('--');
+  if (lastSep < 0) {
+    return undefined;
+  }
+  const parentId = rest.slice(0, lastSep);
+  const index = Number.parseInt(rest.slice(lastSep + 2), 10);
+  if (!parentId || Number.isNaN(index) || index < 0) {
+    return undefined;
+  }
+  return { parentId, index };
+}
+
+function isBotWallet({
+  walletId,
+}: {
+  walletId: string | undefined | null;
+}): boolean {
+  return Boolean(walletId && walletId.startsWith(BOT_WALLET_ID_PREFIX));
+}
+
+function isBotAccount({ accountId }: { accountId: string }): boolean {
+  const walletId = getWalletIdFromAccountId({ accountId });
+  return isBotWallet({ walletId });
+}
+
+// ---- End Bot Wallet ID utilities ----
+
 function buildKeylessDevicePackKey({
   packSetId,
 }: {
@@ -1188,6 +1234,10 @@ export default {
 
   isKeylessWallet,
   isKeylessAccount,
+  isBotWallet,
+  isBotAccount,
+  buildBotWalletId,
+  parseBotWalletId,
   hashKeylessSocialUserId,
   isHdWallet,
   isQrWallet,

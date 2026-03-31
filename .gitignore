@@ -90,7 +90,7 @@ coverage/
 # Temporary files created by Metro to check the health of the file watcher
 .metro-health-check*
 
-# Ignore tamagui config file 
+# Ignore tamagui config file
 .tamagui
 
 # Ignore copy inject files
@@ -132,3 +132,8 @@ debug.log
 /.worktree
 .skillshare/logs/operations.log
 .gstack/
+
+# bmad
+/_bmad/
+/_bmad-output/
+/.skillshare/skills/bmad-*

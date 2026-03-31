@@ -1,10 +1,12 @@
 import { EPrimeCloudSyncDataType } from '@onekeyhq/shared/src/consts/primeConsts';
 import accountUtils from '@onekeyhq/shared/src/utils/accountUtils';
 import type {
+  ICloudSyncBotWalletItem,
   ICloudSyncPayloadWallet,
   ICloudSyncTargetWallet,
 } from '@onekeyhq/shared/types/prime/primeCloudSyncTypes';
 
+import simpleDb from '../../../dbs/simple/simpleDb';
 import cloudSyncItemBuilder from '../cloudSyncItemBuilder';
 
 import { CloudSyncFlowManagerBase } from './CloudSyncFlowManagerBase';
@@ -63,6 +65,22 @@ export class CloudSyncFlowManagerWallet extends CloudSyncFlowManagerBase<
       type: walletType,
       passphraseState = '',
     } = wallet;
+    let botWallets: ICloudSyncBotWalletItem[] | undefined;
+
+    if (wallet.isKeyless) {
+      const entries = await simpleDb.botWallet.getBotWalletsForParent(
+        wallet.id,
+      );
+      botWallets = entries.map(({ walletId, metadata }) => ({
+        index: metadata.index,
+        name: metadata.name,
+        visible: metadata.visible,
+        status: metadata.status,
+        deactivatedAt: metadata.deactivatedAt,
+        createdAt: metadata.createdAt,
+        actualWalletId: walletId,
+      }));
+    }
 
     return {
       name: wallet.name,
@@ -72,6 +90,7 @@ export class CloudSyncFlowManagerWallet extends CloudSyncFlowManagerBase<
       walletHash: hdWalletHash,
       hwDeviceId: dbDevice?.deviceId,
       passphraseState,
+      botWallets,
     };
   }
 
@@ -88,6 +107,25 @@ export class CloudSyncFlowManagerWallet extends CloudSyncFlowManagerBase<
       skipSaveLocalSyncItem: true,
       skipEmitEvent: true,
     });
+    if (target.wallet.isKeyless && payload.botWallets) {
+      await simpleDb.botWallet.replaceMetadataForParent(
+        target.wallet.id,
+        payload.botWallets.map((item) => ({
+          walletId: accountUtils.buildBotWalletId({
+            parentKeylessWalletId: target.wallet.id,
+            index: item.index,
+          }),
+          metadata: {
+            index: item.index,
+            name: item.name,
+            visible: item.visible,
+            status: item.status,
+            deactivatedAt: item.deactivatedAt,
+            createdAt: item.createdAt,
+          },
+        })),
+      );
+    }
     return true;
   }
 
