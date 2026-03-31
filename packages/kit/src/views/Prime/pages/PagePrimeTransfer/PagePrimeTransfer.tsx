@@ -54,25 +54,30 @@ export default function PagePrimeTransfer() {
     }
   }, [primeTransferAtom.status, initialCode]);
 
+  const isBotWalletExport = !!routeParamsBotWalletId;
+
   const { result } = usePromiseResult(async () => {
     noop(primeTransferAtom.websocketEndpointUpdatedAt);
-    const serverConfig =
-      await backgroundApiProxy.simpleDb.primeTransfer.getServerConfig();
+    const serverConfig = isBotWalletExport
+      ? undefined
+      : await backgroundApiProxy.simpleDb.primeTransfer.getServerConfig();
     const endpoint =
-      await backgroundApiProxy.servicePrimeTransfer.getWebSocketEndpoint();
+      await backgroundApiProxy.servicePrimeTransfer.getWebSocketEndpoint({
+        forceOfficialServer: isBotWalletExport,
+      });
     // remove last slash
     const endpointWithoutLastSlash = endpoint.replace(/\/+$/, '');
     return {
       endpoint: endpointWithoutLastSlash,
       serverConfig,
     };
-  }, [primeTransferAtom.websocketEndpointUpdatedAt]);
+  }, [primeTransferAtom.websocketEndpointUpdatedAt, isBotWalletExport]);
 
   useEffect(() => {
     if (!result?.endpoint) {
       return;
     }
-    noop(result.serverConfig?.serverType);
+    noop(result?.serverConfig?.serverType);
     // TODO show websocket connection status by global atom
     void backgroundApiProxy.servicePrimeTransfer.initWebSocket({
       endpoint: result.endpoint,
@@ -91,7 +96,7 @@ export default function PagePrimeTransfer() {
       // Disconnect WebSocket
       void backgroundApiProxy.servicePrimeTransfer.disconnectWebSocket();
     };
-  }, [result?.endpoint, result?.serverConfig?.serverType]);
+  }, [result?.endpoint, result?.serverConfig?.serverType, isBotWalletExport]);
 
   useEffect(() => {
     if (platformEnv.isExtension) {
@@ -137,6 +142,7 @@ export default function PagePrimeTransfer() {
           autoConnect={!!routeParamsCode}
           autoConnectCustomServer={routeParamsServer || undefined}
           defaultTab={routeParamsDefaultTab}
+          botWalletId={routeParamsBotWalletId}
         />
       );
     }

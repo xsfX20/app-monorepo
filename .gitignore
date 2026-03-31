@@ -27,6 +27,7 @@ __generated__
 dist
 build-electron
 .next
+.zed
 build
 *.tsbuildinfo
 yarn-error.log

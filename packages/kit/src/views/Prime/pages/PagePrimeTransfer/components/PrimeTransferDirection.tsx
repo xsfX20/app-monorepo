@@ -168,6 +168,7 @@ export function PrimeTransferDirection({
   const [isKeylessWalletTransfer, setIsKeylessWalletTransfer] = useState(
     transferType === EPrimeTransferDataType.keylessWallet,
   );
+  const isBotWalletExport = !!botWalletId;
   const intl = useIntl();
   const navigation = useAppNavigation();
   const [primeTransferAtom, setPrimeTransferAtom] = usePrimeTransferAtom();
@@ -285,6 +286,53 @@ export function PrimeTransferDirection({
     primeTransferAtom.pairedRoomId,
   ]);
 
+  // Bot wallet export: auto-fix direction so current device is always the sender
+  const botDirectionFixDone = useRef(false);
+  const fixBotDirection = useCallback(async () => {
+    if (!isBotWalletExport) return;
+    if (!directionUserInfo?.fromUser || !directionUserInfo?.toUser) return;
+    if (!isTransferFromMe) {
+      await changeDirection();
+    }
+  }, [
+    isBotWalletExport,
+    directionUserInfo?.fromUser,
+    directionUserInfo?.toUser,
+    isTransferFromMe,
+    changeDirection,
+  ]);
+
+  // Delayed direction check: 1s after paired, auto-fix if needed
+  useEffect(() => {
+    if (!isBotWalletExport) return;
+    if (botDirectionFixDone.current) return;
+    if (primeTransferAtom.status !== EPrimeTransferStatus.paired) return;
+    if (!directionUserInfo?.fromUser || !directionUserInfo?.toUser) return;
+
+    const timer = setTimeout(() => {
+      botDirectionFixDone.current = true;
+      void fixBotDirection().catch((error) => {
+        console.error('[BotDirectionFix] failed:', error);
+      });
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [
+    isBotWalletExport,
+    primeTransferAtom.status,
+    directionUserInfo?.fromUser,
+    directionUserInfo?.toUser,
+    fixBotDirection,
+  ]);
+
+  // Wrap handleStartTransfer to check direction before transfer for bot export
+  const handleStartTransferWithDirectionCheck = useCallback(async () => {
+    if (isBotWalletExport) {
+      await fixBotDirection();
+    }
+    await handleStartTransfer();
+  }, [isBotWalletExport, fixBotDirection, handleStartTransfer]);
+
   const dialogRef = useRef<IDialogInstance | null>(null);
 
   useEffect(() => {
@@ -293,6 +341,9 @@ export function PrimeTransferDirection({
       data: IAppEventBusPayload[EAppEventBusNames.PrimeTransferCancel],
     ) => {
       void dialogRef.current?.close();
+      if (isBotWalletExport) {
+        botDirectionFixDone.current = false;
+      }
       setPrimeTransferAtom(
         (v): IPrimeTransferAtomData => ({
           ...v,
@@ -304,7 +355,7 @@ export function PrimeTransferDirection({
     return () => {
       appEventBus.off(EAppEventBusNames.PrimeTransferCancel, fn);
     };
-  }, [setPrimeTransferAtom]);
+  }, [setPrimeTransferAtom, isBotWalletExport]);
 
   const isClosedBySendData = useRef(false);
 
@@ -349,7 +400,8 @@ export function PrimeTransferDirection({
         // Check if remote device is in keylessWallet mode (sender queries receiver)
 
         // Handle keylessWallet transfer - either local or remote is in keylessWallet mode
-        if (isKeylessWalletTransfer) {
+        // Bot wallet export uses buildTransferData with scoped walletIds, not deviceKeyPack
+        if (isKeylessWalletTransfer && !isBotWalletExport) {
           const deviceKeyPack =
             await backgroundApiProxy.serviceKeylessWallet.getKeylessDevicePackSafe();
           if (!deviceKeyPack) {
@@ -617,9 +669,13 @@ export function PrimeTransferDirection({
   return (
     <>
       <Page.Header
-        title={intl.formatMessage({
-          id: ETranslations.transfer_transfer_data,
-        })}
+        title={
+          isBotWalletExport
+            ? 'Export Bot Wallet'
+            : intl.formatMessage({
+                id: ETranslations.transfer_transfer_data,
+              })
+        }
       />
 
       <Stack p="$5" gap="$3.5">
@@ -647,7 +703,7 @@ export function PrimeTransferDirection({
             px="$5"
             color="$iconSubdued"
             variant="tertiary"
-            disabled={isKeylessWalletTransfer}
+            disabled={isKeylessWalletTransfer || isBotWalletExport}
             onPress={changeDirection}
           />
         </XStack>
@@ -674,7 +730,7 @@ export function PrimeTransferDirection({
             primeTransferAtom.status === EPrimeTransferStatus.transferring,
         }}
         onConfirm={() => {
-          void handleStartTransfer();
+          void handleStartTransferWithDirectionCheck();
         }}
         onConfirmText={intl.formatMessage({
           id: ETranslations.global_transfer,

@@ -83,7 +83,11 @@ function PrimeTransferImportProcessingDialogContent({
 
   const isFlowEnded = isDone || isCancelled || hasError;
   const progressPercentage = importProgress
-    ? Math.ceil((importProgress.current / importProgress.total) * 100)
+    ? importProgress.total > 0
+      ? Math.ceil((importProgress.current / importProgress.total) * 100)
+      : importProgress.isImporting
+        ? 0
+        : 100
     : 0;
 
   useEffect(() => {

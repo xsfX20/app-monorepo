@@ -215,18 +215,22 @@ class ServicePrimeTransfer extends ServiceBase {
   }
 
   @backgroundMethod()
-  async getWebSocketEndpoint() {
+  async getWebSocketEndpoint({
+    forceOfficialServer,
+  }: { forceOfficialServer?: boolean } = {}) {
     // return 'http://localhost:3868';
     // return 'https://app-monorepo.onrender.com';
     // return 'https://transfer.onekey-test.com';
 
-    const customEndpointInfo =
-      await this.backgroundApi.simpleDb.primeTransfer.getServerConfig();
-    if (
-      customEndpointInfo.customServerUrl &&
-      customEndpointInfo.serverType === EPrimeTransferServerType.CUSTOM
-    ) {
-      return customEndpointInfo.customServerUrl;
+    if (!forceOfficialServer) {
+      const customEndpointInfo =
+        await this.backgroundApi.simpleDb.primeTransfer.getServerConfig();
+      if (
+        customEndpointInfo.customServerUrl &&
+        customEndpointInfo.serverType === EPrimeTransferServerType.CUSTOM
+      ) {
+        return customEndpointInfo.customServerUrl;
+      }
     }
 
     const officialEndpointInfo =
@@ -896,14 +900,34 @@ class ServicePrimeTransfer extends ServiceBase {
       }
     }
 
+    const normalizeTransferCredential = (
+      credential:
+        | { credential?: string }
+        | string
+        | null
+        | undefined,
+    ) => {
+      if (typeof credential === 'string') {
+        return credential;
+      }
+      if (typeof credential?.credential === 'string') {
+        return credential.credential;
+      }
+      return undefined;
+    };
+
     const credentials = walletIds?.length
       ? Object.fromEntries(
-          await Promise.all(
-            filteredWallets.map(async (wallet) => [
-              wallet.id,
-              await localDb.getCredential(wallet.id),
-            ]),
-          ),
+          (
+            await Promise.all(
+              filteredWallets.map(async (wallet) => [
+                wallet.id,
+                normalizeTransferCredential(
+                  await localDb.getCredential(wallet.id),
+                ),
+              ]),
+            )
+          ).filter((entry): entry is [string, string] => Boolean(entry[1])),
         )
       : await serviceAccount.dumpCredentials();
 
@@ -913,6 +937,34 @@ class ServicePrimeTransfer extends ServiceBase {
       watchingAccounts: {},
       wallets: {},
     };
+    const buildTransferHdWallet = ({
+      wallet,
+    }: {
+      wallet: IDBWallet;
+    }): IPrimeTransferHDWallet => ({
+      id: wallet.id,
+      name: wallet.name,
+      type: wallet.type,
+      backuped: isForCloudBackup ? true : wallet.backuped,
+      accounts: [],
+      accountIds: [],
+      accountIdsLength: 0,
+      indexedAccountUUIDs: [],
+      indexedAccountUUIDsLength: 0,
+      nextIds: wallet.nextIds,
+      walletOrder: wallet.walletOrder,
+      avatarInfo: wallet.avatarInfo,
+      version: HDWALLET_BACKUP_VERSION,
+      xfp: wallet.xfp || undefined,
+    });
+    // Keep empty HD wallets transferable when they already have credentials.
+    filteredWallets.forEach((wallet) => {
+      if (wallet.type === WALLET_TYPE_HD) {
+        privateBackupData.wallets[wallet.id] = buildTransferHdWallet({
+          wallet,
+        });
+      }
+    });
     const walletAccountMap = filteredWallets.reduce(
       (summary, current) => {
         summary[current.id] = current;
@@ -1033,11 +1085,6 @@ class ServicePrimeTransfer extends ServiceBase {
 
       const wallet = walletAccountMap[walletId];
       if (wallet) {
-        // Skip accounts belonging to keyless wallets
-        if (wallet?.isKeyless) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
         const getNetworkAccountInfo = async () => {
           let networkAccount: INetworkAccount | undefined;
           const networkId = await serviceAccount.getAccountCreatedNetworkId({
@@ -1089,22 +1136,7 @@ class ServicePrimeTransfer extends ServiceBase {
           let walletToBackup: IPrimeTransferHDWallet =
             privateBackupData.wallets[wallet.id];
           if (!walletToBackup) {
-            walletToBackup = {
-              id: walletId,
-              name: wallet.name,
-              type: wallet.type,
-              backuped: isForCloudBackup ? true : wallet.backuped,
-              accounts: [],
-              accountIds: [],
-              accountIdsLength: 0,
-              indexedAccountUUIDs: [],
-              indexedAccountUUIDsLength: 0,
-              nextIds: wallet.nextIds,
-              walletOrder: wallet.walletOrder,
-              avatarInfo: wallet.avatarInfo,
-              version: HDWALLET_BACKUP_VERSION,
-              xfp: wallet.xfp || undefined,
-            };
+            walletToBackup = buildTransferHdWallet({ wallet });
           }
           const HDAccountUUID = account.id;
           if (account.indexedAccountId) {
@@ -1265,19 +1297,29 @@ class ServicePrimeTransfer extends ServiceBase {
       console.log('serviceCloudBackupV2__decryptCredentials');
       for (const [key, value] of entries) {
         try {
+          const credentialRecord = value as { credential?: string } | string;
+          const credentialValue =
+            typeof credentialRecord === 'string'
+              ? credentialRecord
+              : credentialRecord?.credential;
+          if (typeof credentialValue !== 'string') {
+            throw new OneKeyLocalError(
+              `Invalid credential format for transfer: ${key}`,
+            );
+          }
           if (
             accountUtils.isHdWallet({ walletId: key }) ||
             accountUtils.isTonMnemonicCredentialId(key)
           ) {
             data.privateData.decryptedCredentials[key] =
               await decryptRevealableSeed({
-                rs: value,
+                rs: credentialValue,
                 password: localPassword,
               });
           } else if (accountUtils.isImportedAccount({ accountId: key })) {
             data.privateData.decryptedCredentials[key] =
               await decryptImportedCredential({
-                credential: value,
+                credential: credentialValue,
                 password: localPassword,
               });
           }
@@ -1290,7 +1332,10 @@ class ServicePrimeTransfer extends ServiceBase {
           console.error('serviceCloudBackupV2__decryptCredentials__error', {
             error,
             key,
-            value: `${value?.slice(0, 10)}...${value?.slice(-6)}`,
+            value:
+              typeof value === 'string'
+                ? `${value.slice(0, 10)}...${value.slice(-6)}`
+                : JSON.stringify(value)?.slice(0, 120) ?? String(value),
           });
           throw new OneKeyLocalError(
             `Failed to decrypt current credentials: ${key}`,
