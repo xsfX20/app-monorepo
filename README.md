@@ -98,8 +98,7 @@ Run these commands from the root directory:
 | Command | Description |
 |---------|-------------|
 | `yarn app:web` | Start web dev server (port 3000) |
-| `yarn app:ios` | Run the iOS app in the default simulator |
-| `yarn app:ios:device` | Run the iOS app on a connected device |
+| `yarn app:ios` | Run the iOS app |
 | `yarn app:android` | Run Android app |
 | `yarn app:desktop` | Run desktop (Electron) app |
 | `yarn app:ext` | Run browser extension |
